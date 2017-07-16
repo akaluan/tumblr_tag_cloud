@@ -430,17 +430,23 @@
 
 			// Get the settings for this blog
 			$settings = $this->get_blog_settings($blog['id']);
+			//TODO: for now hand set the max character length, add this to settings later
+			$settings['max_char_length'] = 50;
+			$settings['max_weight_ones'] = 30;
+            $settings['max_skip_count'] = 35;
 			
 			// Initialize some variables
 			$posts_queried	= 0;
 			$max_hit_count 	= 1;		// we'll update this with our maximum hit count
 			$min_hit_count 	= 1;		// we're just going to assume this is always 1.
+			$included_mins  = 0;		// number of weight one tags currently in cloud
+			$skip_count 	= 0;		// how many w:1s to skip before next inclusion
+			$a_min			= false;	// if we're including a weight one tag this loop
 			$html_output	= '';
 			$posts			= array();
 			$tags 			= array();
 
 			// Query the actual Tumblr blog. We may have to call multiple pages to get as many results as we'd like
-			$tags = array();
 
 			// Get each page of results from the Tumblr API until there are no more results
 			// or until we've hit our maximum desired lookup count
@@ -467,18 +473,27 @@
 
 				for ($j=0,$d=count($posts[$i]['tags']); $j<$d; $j++)
 				{
-					if (!isset($tags[$posts[$i]['tags'][$j]]))
+					//KA: for case-insensitive tag collation
+					//TODO: come back and make this a setting option
+					$lowercase_tag = strtolower($posts[$i]['tags'][$j]);
+					//$lowercase_tag = $posts[$i]['tags'][$j];
+
+					if (!isset($tags[$lowercase_tag]))
 					{
-						$tags[$posts[$i]['tags'][$j]] = 1;
+						$tags[$lowercase_tag]['hits'] = 1;
+						$tags[$lowercase_tag]['display'] = $posts[$i]['tags'][$j];
 					}
 					else
 					{
-						$tags[$posts[$i]['tags'][$j]]++;
+						$tags[$lowercase_tag]['hits']++;
 
-						if ($tags[$posts[$i]['tags'][$j]] > $max_hit_count)
+						if ($tags[$lowercase_tag]['hits'] > $max_hit_count)
 						{
-							$max_hit_count = $tags[$posts[$i]['tags'][$j]];
+							$max_hit_count = $tags[$lowercase_tag]['hits'];
 						}
+						if(strcmp($tags[$lowercase_tag]['display'],$posts[$i]['tags'][$j])>0){
+                        	$tags[$lowercase_tag]['display'] = $posts[$i]['tags'][$j];
+                    	}
 					}
 				}
 			}
@@ -489,13 +504,34 @@
 				$html_output .= '<style type="text/css">#tumblr_tag_cloud .tag_list{list-style:none;margin-left:0;padding-left:0;} #tumblr_tag_cloud .tag_list li{display:inline;}</style>';
 			}
 			$html_output .= '<ul class="tag_list">';
+			$temp_tag_count = 0;
 
 			// Loop over our tags array and assemble HTML output
 			foreach ($tags as $key => &$val)
 			{
-				$val = array(
-					'hits'	=> $val
-				);
+				//KA: to further reduce the number of tags output, do an mb_strlen check to ignore tags of weight 1 or 2 over (x)-chars
+				if(($val['hits'] == 1 || $val['hits'] == 2 ) && mb_strlen($key,'UTF-8') > $settings['max_char_length']){
+					continue;
+				}
+
+				//KA: as a further reduction, check if this is a weight 1 tag and if we should include it
+				if($val['hits'] == 1){
+					if($skip_count <= 0){
+						//KA: then see if we include this tag
+                        if($included_mins >= $settings['max_weight_ones'] || (rand(0,10) < 5)){
+                        	$skip_count--;
+                            continue;
+                        }else{
+                            $a_min = true;
+                        }
+					}else{
+						//KA: otherwise move along
+						$skip_count--;
+						continue;
+					}
+
+				}
+
 				// If all of the tags have only 1 count, we avoid doing the fancy scaling equations (for fear of division by zero)
 				if ($max_hit_count == $min_hit_count)
 				{
@@ -513,7 +549,13 @@
 				// For some reason tags show up sometimes that are actually URLs, filter them
 				if (strpos($key, "http://") === false)
 				{
-					$html_output .= "\n" . '<li style="font-size: ' . $val['scale'] .'%"><a href="http://' . $domain . '/tagged/' . $key .'" title="' . $val['hits'] . ' Posts">' . $key . '</a> </li>';
+					$html_output .= "\n" . '<li style="font-size: ' . $val['scale'] .'%"><a href="http://' . $domain . '/tagged/' . $key .'" title="' . $val['hits'] . ' Posts">' . $val['display'] . '</a> </li>';
+					$temp_tag_count++;
+					if($a_min){
+						$included_mins++;
+						$skip_count = rand(0,$settings['max_skip_count']);
+					}
+					$a_min = false;
 				}
 			}
 
@@ -527,11 +569,13 @@
 			/*
 			echo "count(posts): " . count($posts) . "\n";
 			echo "max_hit_count: " . $max_hit_count . "\n";
-			echo "html_output: " . $html_output . "\n";
-			echo "tags: ";
-			print_r($tags);
-			die();
-			*/
+			//echo "html_output: " . $html_output . "\n";
+			echo "Tag count: " . count($tags) ."\n";
+			echo "Outputted Tag Count " . $temp_tag_count . "\n";
+			//echo "tags: ";
+			//print_r($tags);
+			die();*/
+
 
 			// Store it in the cache!
 			$this->cache->set($cache_key, $html_output, ($settings['expire_timeout'] * 60));

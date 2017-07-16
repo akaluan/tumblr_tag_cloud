@@ -4,3 +4,4 @@ Capfile
 deploy.rb
 local.dev.php
 .DS_Store
+.idea
